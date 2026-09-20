@@ -1,0 +1,23 @@
+﻿################################################################################
+# This .gitignore file was automatically created by Microsoft(R) Visual Studio.
+################################################################################
+
+/.vs/ProjectSettings.json
+/.vs/slnx.sqlite
+/.vs/TreeGridJS/config/applicationhost.config
+/.vs/TreeGridJS/CopilotIndices/0.2.1634.3922/CodeChunks.db
+/.vs/TreeGridJS/CopilotIndices/0.2.1634.3922/CodeChunks.db-shm
+/.vs/TreeGridJS/CopilotIndices/0.2.1634.3922/CodeChunks.db-wal
+/.vs/TreeGridJS/CopilotIndices/0.2.1634.3922/SemanticSymbols.db
+/.vs/TreeGridJS/CopilotIndices/0.2.1634.3922/SemanticSymbols.db-shm
+/.vs/TreeGridJS/CopilotIndices/0.2.1634.3922/SemanticSymbols.db-wal
+/.vs/TreeGridJS/FileContentIndex/a52c1a13-1da7-4d5e-a618-f66107189e93.vsidx
+/.vs/TreeGridJS/FileContentIndex/b758e17b-de6f-415a-ac42-d30f270a5f29.vsidx
+/.vs/TreeGridJS/v17/.wsuo
+/.vs/TreeGridJS/v17/DocumentLayout.backup.json
+/.vs/TreeGridJS/v17/DocumentLayout.json
+/.vs/VSWorkspaceState.json
+/.vs/TreeGridJS/FileContentIndex/05c525c0-d127-4b98-9296-1de315253b6f.vsidx
+/.vs/TreeGridJS/FileContentIndex/d6229ce4-3cae-4b65-9998-1e2ab048410d.vsidx
+/.vs/TreeGridJS/FileContentIndex/ff3e1a4d-273a-4ff2-97bf-2ce4a1798c57.vsidx
+/.vs/TreeGridJS/FileContentIndex/4e494485-a0d4-473d-a0ba-9ffbad041b67.vsidx
