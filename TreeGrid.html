@@ -1,0 +1,1098 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>Generic Tree Grid</title>
+
+    <style>
+        /* Page chrome only. The grid's own styles are injected by TreeGrid (all scoped under .tg). */
+        body {
+            margin: 0;
+            font-family: "Segoe UI",Arial,sans-serif;
+            background: #f5f6f8;
+        }
+
+        #grid {
+            height: 100vh;
+        }
+    </style>
+</head>
+
+<body>
+
+    <div id="grid"></div>
+
+    <script>/* =============================================================================
+   TreeGrid - a generic grid that loads nested JSON from an API
+
+   Usage
+   -----
+     const grid = new TreeGrid("#container", {
+       url: "https://api.example.com/hours",     // where the JSON comes from
+       levels: [                                 // optional: one entry per grouping level
+         { label:"Country", field:"name", children:"state" },
+         { label:"State",   field:"name", children:"hours", subtotal:true }
+       ],
+       columns: [                                // optional: columns of the innermost rows
+         { label:"Hours", field:"value", type:"number", min:0, step:0.5, aggregate:"sum" },
+         { label:"Type",  field:"type",  type:"select", options:["Office","Remote","Hybrid"] },
+         { label:"Date",  field:"date",  type:"date" }
+       ],
+       onChange: ({row, field, value, data}) => {}   // optional: e.g. save the edit back to your API
+     });
+
+   If "levels" and "columns" are omitted they are inferred from the response.
+
+   Loading data
+   ------------
+     url             GET this URL and read the response as JSON.
+     fetchOptions    passed straight to fetch(): method, headers, credentials, body...
+     fetcher         async () => json. Use instead of "url" for axios, GraphQL, auth wrappers, etc.
+     dataPath        where the array lives in the response, e.g. "result.items"
+                     (omit if the response itself is the array).
+     transform       json => array. Use instead of dataPath to reshape the response.
+     saver           async (data) => result. Sends the modified data to your API (see grid.save()).
+     onSave(result)  called after a successful save.
+     onSaveError(e)  called when saving fails.
+     onLoad(data)    called after a successful load.
+     onError(error)  called when loading fails (the grid also shows the error with a Retry button).
+     data            optional: rows you already have. Used as-is when no url/fetcher is given.
+
+   Layout options
+   --------------
+     levels[]        field      property shown in the grouping column (required)
+                     children   property holding the child array (required; on the last
+                                level it points at the leaf rows)
+                     label      column header (default: title-cased field)
+                     group      column group header shown above this column (see below)
+                     subtotal   true = show a subtotal row under each group at this level
+                     id         property that uniquely identifies a group (default: field)
+                     width      column width in px
+     columns[]       field      property on each leaf row (required)
+                     label      header text
+                     group      column group header shown above this column (see below)
+                     type       "text" | "number" | "select" | "date"   (default "text")
+                     options    choices for "select". Where they come from, in order of priority:
+                                  options:[...]          a fixed list
+                                  options: response => [...]   picked out of the loaded JSON
+                                  optionsPath:"a.b"      path to a list inside the loaded JSON
+                                  (nothing)              the distinct values found in the rows
+                     optionsPath   Every select column has its own list, so several lookup columns
+                                can each point at a different field of the same response.
+                     optionValue, optionLabel
+                                for lists of objects such as [{ id:1, name:"Draft" }]: which property
+                                is stored in the row and which one is shown. Defaults: the first of
+                                value/id/code/key and the first of label/name/text/description/title.
+                                Plain lists like ["Office","Remote"] need neither.
+                                The row keeps the stored value (a number stays a number); filtering,
+                                sorting and read-only cells use the shown label.
+                                A row's current value is always offered, even if it is not in the list.
+                     editable   false = read-only text (default true)
+                     aggregate  "sum" | "avg" | "min" | "max" | "count" -> totals for the column
+                     min, max, step   passed to number inputs
+                     width      column width in px
+     columnWidth     default column width in px (220)
+
+   Action column (row selection)
+   -----------------------------
+     actionColumn    true, or { group, label, width }: adds a checkbox column as the first column.
+                       group  text of its column group header (default "Action", "" = none)
+                       label  header text (default "": the header holds a select-all checkbox)
+                       width  column width in px (default 90)
+     onSelectionChange  ({ selected, count }) => {}   called whenever the ticked rows change
+
+     The header checkbox ticks every row that is currently shown (after filtering). A group
+     checkbox ticks every row inside that group, even when the group is collapsed. Both show a
+     partial state when only some rows are ticked. Ticked rows are the same objects as in your
+     data, so include an id field in your rows if you need to identify them.
+     Ticks are kept while sorting, filtering and editing, and cleared when new data is loaded.
+
+   Column group headers
+   --------------------
+     Give neighbouring columns the same "group" text and a header row appears above the
+     column headers with one cell spanning each run of columns that share a group:
+
+       levels:  [ { label:"Country", field:"name", children:"state", group:"Location" },
+                  { label:"State",   field:"name", children:"hours", group:"Location" } ],
+       columns: [ { label:"Hours", field:"value", group:"Work details" },
+                  { label:"Type",  field:"type",  group:"Work details" }, ... ]
+
+     Columns without a group get a blank cell above them. Columns with the same group text
+     should be next to each other; a group that is split becomes two separate spans.
+     No column has a group = no extra row.
+
+     subtotalLabel   text for subtotal rows, "{name}" is replaced by the group value
+     grandTotalLabel text for the grand total row (default "Grand Total")
+     grandTotal      false = hide the grand total row
+     expandAll       true = start with every group expanded
+     onChange        called after a cell is edited
+
+   Methods
+   -------
+     grid.load()                re-fetch from the API (e.g. a Refresh button)
+     grid.save()                send the modified data to "saver"; returns a promise
+     grid.isDirty()             true when there are edits that have not been saved
+     grid.getSelected()         the ticked rows (array of row objects, in data order)
+     grid.selectAll()           tick every row, ignoring filters
+     grid.clearSelection()      untick everything
+     grid.setData(array)        replace the data with rows you already have
+     grid.setOptions(options)   replace data source and configuration
+     grid.getData()             the (edited) data array
+     grid.expandAll() / grid.collapseAll()
+   ============================================================================ */
+
+(function (global) {
+  "use strict";
+
+  /* ---------- styles (scoped, injected once) ---------- */
+
+  const CSS = `
+.tg{position:relative;height:100%;overflow:auto;background:#f5f6f8;font-family:"Segoe UI",Arial,sans-serif;font-size:14px;color:#1f2933;}
+.tg *{box-sizing:border-box;}
+.tg-inner{min-width:100%;width:max-content;}
+
+.tg-head{position:sticky;top:0;z-index:20;}
+.tg-header-row,.tg-filter-row{display:flex;}
+.tg-header-row{background:linear-gradient(#f8f9fb,#e2e6ea);font-weight:600;border-bottom:1px solid #cfd6dc;}
+.tg-filter-row{background:#fff;border-bottom:1px solid #d6dde5;}
+
+/* column group header: one cell per run of columns sharing a group, above the column headers */
+.tg-group-row{display:flex;background:linear-gradient(#eef1f5,#dde2e8);border-bottom:1px solid #cfd6dc;font-weight:600;color:#0b4a7a;}
+.tg-group{flex:0 0 auto;padding:6px 10px;text-align:center;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
+.tg-group + .tg-group{border-left:1px solid #cfd6dc;}
+.tg-group-start{border-left:1px solid #cfd6dc;}
+
+/* action column: checkboxes */
+.tg-header.tg-action{cursor:default;justify-content:center;}
+.tg-header.tg-action:hover{background:none;}
+.tg-header.tg-action span{margin-right:8px;}
+.tg-action-cell{justify-content:center;}
+.tg input[type=checkbox]{width:16px;height:16px;padding:0;margin:0;cursor:pointer;accent-color:#0078d4;}
+.tg input[type=checkbox]:disabled{cursor:default;}
+.tg-row.tg-selected{background:#e8f2fb;}
+
+.tg-header,.tg-filter-cell{flex:0 0 auto;padding:10px;}
+.tg-header{cursor:pointer;user-select:none;display:flex;align-items:center;justify-content:space-between;}
+.tg-header:hover{background:rgba(0,120,212,0.08);}
+.tg-sort{color:#0078d4;font-size:11px;margin-left:6px;min-width:10px;}
+
+.tg-row{display:flex;border-bottom:1px solid #e5e9ef;}
+.tg-cell{flex:0 0 auto;padding:8px 10px;display:flex;align-items:center;min-width:0;overflow:hidden;}
+
+.tg-expand{cursor:pointer;font-weight:bold;color:#0078d4;margin-right:5px;user-select:none;}
+.tg-expand:focus-visible{outline:2px solid #0078d4;outline-offset:2px;}
+
+.tg input,.tg select{width:100%;padding:3px;font-size:13px;}
+
+.tg-subtotal{display:flex;background:#eef4fb;border-bottom:1px solid #cfd6dc;font-weight:600;}
+.tg-subtotal .tg-cell{color:#0b4a7a;}
+
+/* grand total is the last row of the grid, sticky to the bottom while scrolling */
+.tg-grand{display:flex;background:#0b4a7a;color:#fff;font-weight:700;border-top:2px solid #063355;position:sticky;bottom:0;z-index:10;}
+.tg-grand .tg-cell{color:#fff;}
+
+.tg-empty{padding:16px;color:#5b6773;}
+.tg-error{color:#b42318;}
+.tg button{margin-left:8px;padding:3px 12px;border:1px solid #0078d4;background:#fff;color:#0078d4;border-radius:3px;cursor:pointer;font:inherit;}
+.tg button:hover{background:#e8f2fb;}
+`;
+
+  function injectStyles() {
+    if (document.getElementById("tg-styles")) return;
+    const s = document.createElement("style");
+    s.id = "tg-styles";
+    s.textContent = CSS;
+    document.head.appendChild(s);
+  }
+
+  /* ---------- helpers ---------- */
+
+  const SEP = "\u001f";
+  const isObj = v => v !== null && typeof v === "object" && !Array.isArray(v);
+  const isObjArray = v => Array.isArray(v) && v.length > 0 && isObj(v[0]);
+  const text = v => (v == null ? "" : String(v));
+  const match = (v, f) => !f || text(v).toLowerCase().includes(f);
+  const num = v => { const n = Number(v); return Number.isFinite(n) ? n : 0; };
+  const round = n => Math.round(n * 100) / 100;
+  const getPath = (obj, path) => String(path).split(".").reduce((o, k) => (o == null ? undefined : o[k]), obj);
+  const title = s => String(s)
+    .replace(/([a-z])([A-Z])/g, "$1 $2")
+    .replace(/[_-]+/g, " ")
+    .replace(/\b\w/g, c => c.toUpperCase());
+
+  function el(tag, cls) {
+    const e = document.createElement(tag);
+    if (cls) e.className = cls;
+    return e;
+  }
+
+  const AGG = {
+    sum: v => v.reduce((a, b) => a + b, 0),
+    avg: v => (v.length ? v.reduce((a, b) => a + b, 0) / v.length : 0),
+    min: v => (v.length ? v.reduce((a, b) => Math.min(a, b)) : 0),
+    max: v => (v.length ? v.reduce((a, b) => Math.max(a, b)) : 0),
+    count: v => v.length
+  };
+
+  function compare(a, b, dir) {
+    const m = dir === "asc" ? 1 : -1;
+    if (typeof a === "number" && typeof b === "number") return (a - b) * m;
+    return text(a).localeCompare(text(b), undefined, { numeric: true }) * m;
+  }
+
+  /* Work out levels and leaf columns from the shape of the data. */
+  function inferSchema(data) {
+    const levels = [];
+    let nodes = Array.isArray(data) ? data : [];
+
+    for (;;) {
+      const sample = nodes.find(isObj);
+      if (!sample) break;
+      const childKey = Object.keys(sample).find(k => isObjArray(sample[k]));
+      if (!childKey) break;
+
+      const keys = Object.keys(sample);
+      const labelField = "name" in sample
+        ? "name"
+        : (keys.find(k => typeof sample[k] === "string") || keys.find(k => k !== childKey));
+
+      const parent = levels[levels.length - 1];
+      levels.push({
+        label: parent ? title(parent.children) : title(labelField),
+        field: labelField,
+        children: childKey
+      });
+      nodes = nodes.flatMap(n => (isObj(n) && Array.isArray(n[childKey]) ? n[childKey] : []));
+    }
+
+    const leaves = nodes.filter(isObj).slice(0, 200);
+    const seen = new Set();
+    const keys = [];
+    leaves.forEach(l => Object.keys(l).forEach(k => {
+      if (!seen.has(k) && !Array.isArray(l[k]) && !isObj(l[k])) { seen.add(k); keys.push(k); }
+    }));
+
+    const columns = keys.map(k => {
+      const vals = leaves.map(l => l[k]).filter(v => v != null);
+      let type = "text";
+      if (vals.length && vals.every(v => typeof v === "number")) type = "number";
+      else if (vals.length && vals.every(v => typeof v === "string" && /^\d{4}-\d{2}-\d{2}$/.test(v))) type = "date";
+      return { label: title(k), field: k, type };
+    });
+
+    return { levels, columns };
+  }
+
+  /* ---------- the grid ---------- */
+
+  class TreeGrid {
+
+    constructor(container, options = {}) {
+      const host = typeof container === "string" ? document.querySelector(container) : container;
+      if (!host) throw new Error("TreeGrid: container not found.");
+      injectStyles();
+      this.host = host;
+      this.requestId = 0;
+      this.version = 0;      // bumped on every edit
+      this.dirty = false;    // true while edits are unsaved
+      this.saving = null;    // promise of the save in flight
+      this.setOptions(options);
+    }
+
+    /* ----- configuration ----- */
+
+    setOptions(opts) {
+      if (!isObj(opts)) throw new Error("TreeGrid: options must be an object.");
+      if (opts.data != null && !Array.isArray(opts.data)) throw new Error('TreeGrid: "data" must be an array.');
+
+      this.configure(opts, opts.data || [], opts.data);
+      if (opts.url || typeof opts.fetcher === "function") this.load();
+    }
+
+    /* Applies the layout options to a given array of rows and draws the grid.
+       "response" is the whole JSON the rows came from; select options can be read from it. */
+    configure(opts, data, response) {
+      this.requestId++;   // any request still in flight is now stale
+      this.dirty = false;
+
+      const inferred = inferSchema(data);
+
+      const levels = (opts.levels || inferred.levels).map((l, i) => {
+        if (!l || !l.field || !l.children) {
+          throw new Error(`TreeGrid: levels[${i}] needs both "field" and "children".`);
+        }
+        return { subtotal: false, ...l };
+      });
+
+      const columns = (opts.columns || inferred.columns).map((c, i) => {
+        if (!c || !c.field) throw new Error(`TreeGrid: columns[${i}] needs a "field".`);
+        if (c.aggregate && !AGG[c.aggregate]) {
+          throw new Error(`TreeGrid: columns[${i}] has unknown aggregate "${c.aggregate}".`);
+        }
+        return { type: "text", editable: true, ...c, label: c.label || title(c.field) };
+      });
+
+      const width = opts.columnWidth || 220;
+
+      this.opts = opts;
+      this.data = data;
+      this.levels = levels;
+      this.columns = columns;
+      this.cols = [
+        ...levels.map(l => ({ label: l.label || title(l.field), width: l.width || width, group: text(l.group) })),
+        ...columns.map(c => ({ label: c.label, width: c.width || width, group: text(c.group) }))
+      ];
+
+      /* optional checkbox column shown in front of every row */
+      const a = opts.actionColumn;
+      this.action = a ? {
+        label: isObj(a) ? text(a.label) : "",
+        group: isObj(a) && a.group !== undefined ? text(a.group) : "Action",
+        width: (isObj(a) && a.width) || 90
+      } : null;
+
+      /* indexes of the data columns where a new group starts (drawn as a divider in the header and filter rows) */
+      const all = this.action ? [{ group: this.action.group }, ...this.cols] : this.cols;
+      const shift = this.action ? 1 : 0;
+      this.groupStarts = new Set();
+      all.forEach((c, k) => { if (k > 0 && c.group !== all[k - 1].group) this.groupStarts.add(k - shift); });
+
+      const hadSelection = this.selected ? this.selected.size : 0;
+      this.selected = new Set();   // ticked leaf rows (kept outside the data, so they never end up in save())
+      this.selRefs = [];
+      this.hasAgg = columns.some(c => c.aggregate);
+
+      const leaves = this.collect(this.data, 0, []);
+      columns.forEach(c => {
+        if (c.type !== "select") return;
+
+        let list = null;
+        if (typeof c.options === "function") {
+          /* there is no response yet while the first load is still running */
+          if (response !== undefined) {
+            try { list = c.options(response); }
+            catch (e) { console.warn('TreeGrid: options() for column "' + c.field + '" failed, using the values in the rows.', e); }
+          }
+        } else if (Array.isArray(c.options)) list = c.options;
+        else if (c.optionsPath) list = getPath(response, c.optionsPath);
+
+        /* nothing configured (or nothing found): offer the distinct values that appear in the rows */
+        if (!Array.isArray(list) || !list.length) {
+          list = [...new Set(leaves.map(l => l[c.field]).filter(v => v != null))];
+        }
+        this.buildOptions(c, list);
+      });
+
+      this.sort = { col: null, dir: "asc" };
+      this.filters = this.cols.map(() => "");
+      this.expanded = new Set();
+      this.totalRefs = [];
+
+      this.buildShell();
+      if (opts.expandAll) this.expandAll(false);
+      this.render();
+      if (hadSelection) this.fireSelection();
+    }
+
+    /* Turns a lookup list into entries { value, label, raw } for a select column.
+       value = string used by the <option>, label = what the user sees, raw = what is stored in the row. */
+    buildOptions(col, list) {
+      const pick = (item, key, guesses) => {
+        if (key) return item[key];
+        const k = guesses.find(g => g in item);
+        return k === undefined ? undefined : item[k];
+      };
+
+      col._options = [];
+      col._byValue = new Map();
+
+      list.forEach(item => {
+        if (item == null) return;
+        let raw = item, label = item;
+        if (isObj(item)) {
+          raw = pick(item, col.optionValue, ["value", "id", "code", "key"]);
+          label = pick(item, col.optionLabel, ["label", "name", "text", "description", "title"]);
+          if (raw == null) return;                  // entry without a usable value
+          if (label == null) label = raw;
+        }
+        const value = String(raw);
+        if (col._byValue.has(value)) return;        // ignore duplicates
+        const entry = { value, label: String(label), raw };
+        col._byValue.set(value, entry);
+        col._options.push(entry);
+      });
+    }
+
+    /* Text shown for a stored value: the lookup label for select columns, the value itself otherwise. */
+    labelOf(col, v) {
+      if (col.type === "select" && col._byValue) {
+        const entry = col._byValue.get(text(v));
+        if (entry) return entry.label;
+      }
+      return text(v);
+    }
+
+    /* Replaces the rows. Pass the whole response as the second argument if select options are read from it. */
+    setData(data, response) {
+      if (!Array.isArray(data)) throw new Error('TreeGrid: "data" must be an array.');
+      this.configure(this.opts, data, response === undefined ? data : response);
+    }
+
+    getData() { return this.data; }
+
+    /* Fetches the rows from the API and redraws. Call again to refresh. */
+    async load() {
+      const opts = this.opts;
+      if (!opts.url && typeof opts.fetcher !== "function") {
+        throw new Error('TreeGrid: set "url" or "fetcher" before calling load().');
+      }
+
+      const ticket = ++this.requestId;
+      this.showStatus("Loading...");
+
+      try {
+        let json;
+        if (typeof opts.fetcher === "function") {
+          json = await opts.fetcher();
+        } else {
+          const res = await fetch(opts.url, opts.fetchOptions);
+          if (!res.ok) throw new Error("HTTP " + res.status + (res.statusText ? " " + res.statusText : ""));
+          json = await res.json();
+        }
+        if (ticket !== this.requestId) return;   // superseded by a newer load or setData
+
+        const response = json;                   // kept whole: select options may live next to the rows
+        if (typeof opts.transform === "function") json = opts.transform(json);
+        else if (opts.dataPath) json = getPath(json, opts.dataPath);
+
+        if (!Array.isArray(json)) {
+          throw new Error('The response is not an array. Set "dataPath" (e.g. "result.items") or "transform" to point at the rows.');
+        }
+
+        this.configure(opts, json, response);
+        if (typeof opts.onLoad === "function") opts.onLoad(json);
+      } catch (e) {
+        if (ticket !== this.requestId) return;
+        this.showStatus("Couldn't load data: " + e.message, true);
+        if (typeof opts.onError === "function") opts.onError(e);
+      }
+    }
+
+    isDirty() { return this.dirty; }
+
+    /* Sends the current (edited) data to opts.saver and resolves with whatever saver returns.
+       The saver receives a snapshot, so edits made while the request is running do not change what was sent.
+       Calling save() while a save is running returns the same promise instead of sending twice. */
+    save() {
+      const opts = this.opts;
+      if (typeof opts.saver !== "function") {
+        return Promise.reject(new Error('TreeGrid: set "saver" before calling save().'));
+      }
+      if (this.saving) return this.saving;
+
+      const sentVersion = this.version;
+      const snapshot = structuredClone(this.data);
+
+      this.saving = (async () => {
+        try {
+          const result = await opts.saver(snapshot);
+          if (this.version === sentVersion) this.dirty = false;   // stay dirty if edited during the request
+          if (typeof opts.onSave === "function") opts.onSave(result);
+          return result;
+        } catch (e) {
+          if (typeof opts.onSaveError === "function") opts.onSaveError(e);
+          throw e;
+        } finally {
+          this.saving = null;
+        }
+      })();
+
+      return this.saving;
+    }
+
+    showStatus(message, isError) {
+      const box = el("div", isError ? "tg-empty tg-error" : "tg-empty");
+      box.setAttribute("role", isError ? "alert" : "status");
+      box.textContent = message;
+      if (isError) {
+        const retry = document.createElement("button");
+        retry.textContent = "Retry";
+        retry.onclick = () => this.load();
+        box.appendChild(retry);
+      }
+      this.body.textContent = "";
+      this.body.appendChild(box);
+    }
+
+    expandAll(render = true) {
+      const L = this.levels.length;
+      const walk = (nodes, depth, prefix) => {
+        if (depth >= L) return;
+        const lv = this.levels[depth];
+        nodes.forEach(n => {
+          const key = prefix + SEP + text(n[lv.id || lv.field]);
+          this.expanded.add(key);
+          walk(n[lv.children] || [], depth + 1, key);
+        });
+      };
+      walk(this.data, 0, "");
+      if (render) this.render();
+    }
+
+    collapseAll() {
+      this.expanded.clear();
+      this.render();
+    }
+
+    /* ----- tree helpers ----- */
+
+    collect(nodes, depth, out) {
+      if (depth >= this.levels.length) {
+        for (const n of nodes) out.push(n);
+        return out;
+      }
+      const ch = this.levels[depth].children;
+      for (const n of nodes) this.collect((n && n[ch]) || [], depth + 1, out);
+      return out;
+    }
+
+    /* Pure filter step: returns a pruned copy of the tree, leaf objects are shared with the source data. */
+    filterNodes(nodes, depth) {
+      const L = this.levels.length;
+      const f = this.filters;
+
+      if (depth === L) {
+        return nodes.filter(leaf => this.columns.every((c, j) => match(this.labelOf(c, leaf[c.field]), f[L + j])));
+      }
+
+      const lv = this.levels[depth];
+      const out = [];
+      for (const n of nodes) {
+        if (!match(n[lv.field], f[depth])) continue;
+        const kids = this.filterNodes(n[lv.children] || [], depth + 1);
+        if (kids.length) out.push({ ...n, [lv.children]: kids });
+      }
+      return out;
+    }
+
+    /* Sorts the pruned copy in place: a group column sorts groups, a leaf column sorts rows within each parent. */
+    sortNodes(nodes, depth) {
+      const { col, dir } = this.sort;
+      if (col == null) return;
+      const L = this.levels.length;
+
+      if (depth < L) {
+        const lv = this.levels[depth];
+        if (col === depth) nodes.sort((a, b) => compare(a[lv.field], b[lv.field], dir));
+        nodes.forEach(n => this.sortNodes(n[lv.children], depth + 1));
+      } else if (col >= L) {
+        const c = this.columns[col - L];
+        const f = c.field;
+        if (c.type === "select") nodes.sort((a, b) => compare(this.labelOf(c, a[f]), this.labelOf(c, b[f]), dir));
+        else nodes.sort((a, b) => compare(a[f], b[f], dir));
+      }
+    }
+
+    /* ----- DOM: shell, header ----- */
+
+    buildShell() {
+      this.host.textContent = "";
+
+      const root = el("div", "tg");
+      const inner = el("div", "tg-inner");
+      const head = el("div", "tg-head");
+      const filterRow = el("div", "tg-filter-row");
+      this.headerRow = el("div", "tg-header-row");
+      this.body = el("div", "tg-body");
+
+      if (this.action) {
+        const blank = el("div", "tg-filter-cell");
+        blank.style.width = this.action.width + "px";
+        filterRow.appendChild(blank);
+      }
+
+      this.cols.forEach((col, i) => {
+        const cell = el("div", "tg-filter-cell");
+        cell.style.width = col.width + "px";
+        if (this.groupStarts.has(i)) cell.classList.add("tg-group-start");
+        const input = document.createElement("input");
+        input.placeholder = "Filter...";
+        input.setAttribute("aria-label", "Filter " + col.label);
+        input.oninput = () => { this.filters[i] = input.value.toLowerCase(); this.render(); };
+        cell.appendChild(input);
+        filterRow.appendChild(cell);
+      });
+
+      if (this.groupSpans().some(s => s.label)) head.appendChild(this.buildGroupRow());
+      head.append(this.headerRow, filterRow);
+      inner.append(head, this.body);
+      root.appendChild(inner);
+      this.host.appendChild(root);
+    }
+
+    /* Spans of neighbouring columns that share a group text, e.g. [{ label:"Location", span:2, width:440 }, ...]. */
+    groupSpans() {
+      const spans = [];
+      const list = this.action ? [{ group: this.action.group, width: this.action.width }, ...this.cols] : this.cols;
+      list.forEach(col => {
+        const last = spans[spans.length - 1];
+        if (last && last.label === col.group) { last.span++; last.width += col.width; }
+        else spans.push({ label: col.group, span: 1, width: col.width });
+      });
+      return spans;
+    }
+
+    buildGroupRow() {
+      const row = el("div", "tg-group-row");
+      row.setAttribute("role", "row");
+      this.groupSpans().forEach(s => {
+        const cell = el("div", "tg-group");
+        cell.style.width = s.width + "px";
+        cell.setAttribute("role", "columnheader");
+        cell.setAttribute("aria-colspan", String(s.span));
+        cell.textContent = s.label;
+        if (s.label) cell.title = s.label;
+        row.appendChild(cell);
+      });
+      return row;
+    }
+
+    actionHeader() {
+      const d = el("div", "tg-header tg-action");
+      d.style.width = this.action.width + "px";
+      if (this.action.label) {
+        const label = document.createElement("span");
+        label.textContent = this.action.label;
+        d.appendChild(label);
+      }
+      const box = this.checkbox("Select all rows");
+      box.onchange = () => this.setLeavesSelected(this.shownLeaves, box.checked);
+      this.selectAllBox = box;
+      d.appendChild(box);
+      return d;
+    }
+
+    renderHeader() {
+      this.headerRow.textContent = "";
+      if (this.action) this.headerRow.appendChild(this.actionHeader());
+      this.cols.forEach((col, i) => {
+        const d = el("div", "tg-header");
+        d.style.width = col.width + "px";
+        if (this.groupStarts.has(i)) d.classList.add("tg-group-start");
+
+        const label = document.createElement("span");
+        label.textContent = col.label;
+        const arrow = el("span", "tg-sort");
+        if (this.sort.col === i) arrow.textContent = this.sort.dir === "asc" ? "\u25B2" : "\u25BC";
+        d.append(label, arrow);
+
+        d.onclick = () => {
+          if (this.sort.col === i) this.sort.dir = this.sort.dir === "asc" ? "desc" : "asc";
+          else this.sort = { col: i, dir: "asc" };
+          this.render();
+        };
+        this.headerRow.appendChild(d);
+      });
+    }
+
+    /* ----- DOM: body ----- */
+
+    render() {
+      this.renderHeader();
+      this.totalRefs = [];
+
+      const tree = this.filterNodes(this.data, 0);
+      this.sortNodes(tree, 0);
+
+      /* checkboxes to keep in sync with the selection; the header one covers every row that is shown */
+      this.shownLeaves = this.collect(tree, 0, []);
+      this.selRefs = [];
+      if (this.action) {
+        this.selRefs.push({ box: this.selectAllBox, leaves: this.shownLeaves });
+        this.selectAllBox.disabled = !this.shownLeaves.length;
+      }
+
+      const frag = document.createDocumentFragment();
+
+      if (!tree.length) {
+        const empty = el("div", "tg-empty");
+        empty.textContent = this.data.length ? "No rows match the current filters." : "No data.";
+        frag.appendChild(empty);
+      } else {
+        this.renderNodes(tree, 0, "", frag);
+        if (this.opts.grandTotal !== false && this.hasAgg) {
+          const labelIdx = this.labelColumn(true);
+          frag.appendChild(this.totalRow("tg-grand", this.opts.grandTotalLabel || "Grand Total", labelIdx, this.collect(tree, 0, [])));
+        }
+      }
+
+      this.body.textContent = "";
+      this.body.appendChild(frag);
+      this.updateSelectionUI();
+    }
+
+    renderNodes(nodes, depth, prefix, out) {
+      const L = this.levels.length;
+
+      if (depth === L) {
+        nodes.forEach(leaf => out.appendChild(this.leafRow(leaf)));
+        return;
+      }
+
+      const lv = this.levels[depth];
+      nodes.forEach(node => {
+        const key = prefix + SEP + text(node[lv.id || lv.field]);
+        const open = this.expanded.has(key);
+
+        const cells = this.blankCells();
+        cells[depth] = this.groupCell(depth, node[lv.field], open, key);
+
+        const action = this.action
+          ? this.actionCell(this.collect(node[lv.children] || [], depth + 1, []), "Select all rows in " + text(node[lv.field]))
+          : null;
+        out.appendChild(this.row(cells, null, action));
+
+        if (!open) return;
+
+        this.renderNodes(node[lv.children] || [], depth + 1, key, out);
+
+        if (lv.subtotal && this.hasAgg) {
+          const label = (this.opts.subtotalLabel || "Total for {name}").replace("{name}", text(node[lv.field]));
+          const leaves = this.collect(node[lv.children] || [], depth + 1, []);
+          out.appendChild(this.totalRow("tg-subtotal", label, this.labelColumn(false), leaves));
+        }
+      });
+    }
+
+    /* Column that carries the label of a total row: the last (subtotal) or first (grand) column without an aggregate. */
+    labelColumn(first) {
+      const L = this.levels.length;
+      const free = this.cols.map((_, i) => i).filter(i => i < L || !this.columns[i - L].aggregate);
+      if (!free.length) return -1;
+      return first ? free[0] : free[free.length - 1];
+    }
+
+    row(cells, cls, actionCell) {
+      const r = el("div", cls || "tg-row");
+      if (this.action) r.appendChild(actionCell || this.actionCell(null));
+      cells.forEach(c => r.appendChild(c));
+      return r;
+    }
+
+    /* ----- selection ----- */
+
+    checkbox(label) {
+      const box = document.createElement("input");
+      box.type = "checkbox";
+      box.setAttribute("aria-label", label);
+      return box;
+    }
+
+    /* Cell of the action column. Without leaves it is an empty spacer (used by total rows). */
+    actionCell(leaves, label) {
+      const d = el("div", "tg-cell tg-action-cell");
+      d.style.width = this.action.width + "px";
+      if (!leaves) return d;
+
+      const box = this.checkbox(label);
+      box.onchange = () => this.setLeavesSelected(leaves, box.checked);
+      d.ref = { box, leaves, row: null };
+      this.selRefs.push(d.ref);
+      d.appendChild(box);
+      return d;
+    }
+
+    setLeavesSelected(leaves, on) {
+      leaves.forEach(l => (on ? this.selected.add(l) : this.selected.delete(l)));
+      this.updateSelectionUI();
+      this.fireSelection();
+    }
+
+    /* Repaint checkbox states in place, so keyboard focus is not lost when ticking. */
+    updateSelectionUI() {
+      this.selRefs.forEach(ref => {
+        let n = 0;
+        for (const l of ref.leaves) if (this.selected.has(l)) n++;
+        const all = ref.leaves.length > 0 && n === ref.leaves.length;
+        ref.box.checked = all;
+        ref.box.indeterminate = n > 0 && !all;
+        if (ref.row) ref.row.classList.toggle("tg-selected", all);
+      });
+    }
+
+    fireSelection() {
+      if (typeof this.opts.onSelectionChange !== "function") return;
+      const selected = this.getSelected();
+      this.opts.onSelectionChange({ selected, count: selected.length });
+    }
+
+    getSelected() {
+      return this.collect(this.data, 0, []).filter(l => this.selected.has(l));
+    }
+
+    selectAll() {
+      this.collect(this.data, 0, []).forEach(l => this.selected.add(l));
+      this.updateSelectionUI();
+      this.fireSelection();
+    }
+
+    clearSelection() {
+      this.selected.clear();
+      this.updateSelectionUI();
+      this.fireSelection();
+    }
+
+    blankCells() {
+      return this.cols.map((_, i) => this.cell(i, ""));
+    }
+
+    cell(i, t) {
+      const d = el("div", "tg-cell");
+      d.style.width = this.cols[i].width + "px";
+      if (t) d.textContent = t;
+      return d;
+    }
+
+    groupCell(depth, value, open, key) {
+      const d = this.cell(depth, "");
+      const icon = el("span", "tg-expand");
+      icon.textContent = open ? "\u2212" : "+";
+      icon.setAttribute("role", "button");
+      icon.setAttribute("aria-expanded", String(open));
+      icon.tabIndex = 0;
+
+      const toggle = () => {
+        if (open) this.expanded.delete(key); else this.expanded.add(key);
+        this.render();
+      };
+      icon.onclick = toggle;
+      icon.onkeydown = e => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); toggle(); } };
+
+      d.append(icon, text(value));
+      return d;
+    }
+
+    leafRow(leaf) {
+      const L = this.levels.length;
+      const cells = this.blankCells();
+      this.columns.forEach((c, j) => { cells[L + j] = this.editorCell(L + j, c, leaf); });
+
+      const action = this.action ? this.actionCell([leaf], "Select row") : null;
+      const r = this.row(cells, null, action);
+      if (action) action.ref.row = r;   // lets the row be highlighted while ticked
+      return r;
+    }
+
+    editorCell(i, col, leaf) {
+      const d = this.cell(i, "");
+      const v = leaf[col.field];
+
+      if (col.editable === false) {
+        d.textContent = this.labelOf(col, v);
+        return d;
+      }
+
+      let input;
+      let byValue = null;   // select only: option value -> { value, label, raw }
+      if (col.type === "select") {
+        input = document.createElement("select");
+
+        /* The row's own value is always offered. A row without a value gets a blank entry. */
+        const current = v == null ? "" : String(v);
+        const list = col._byValue.has(current) ? col._options : [{ value: current, label: current, raw: v }, ...col._options];
+        byValue = new Map(list.map(o => [o.value, o]));
+
+        list.forEach(o => {
+          const opt = document.createElement("option");
+          opt.value = o.value;
+          opt.textContent = o.label;
+          if (o.value === current) opt.selected = true;
+          input.appendChild(opt);
+        });
+      } else {
+        input = document.createElement("input");
+        input.type = col.type === "number" ? "number" : col.type === "date" ? "date" : "text";
+        if (col.type === "number") {
+          if (col.min != null) input.min = col.min;
+          if (col.max != null) input.max = col.max;
+          if (col.step != null) input.step = col.step;
+        }
+        input.value = v == null ? "" : v;
+      }
+
+      input.setAttribute("aria-label", col.label);
+      input.onchange = () => {
+        const raw = input.value;
+        let value;
+        if (col.type === "select") value = byValue.has(raw) ? byValue.get(raw).raw : raw;   // keeps numbers as numbers
+        else value = col.type === "number" ? (raw === "" ? 0 : Number(raw)) : raw;
+        leaf[col.field] = value;
+        this.commit(leaf, col, value, i);
+      };
+
+      d.appendChild(input);
+      return d;
+    }
+
+    /* Refresh only what an edit can affect. A full re-render is needed only when the edited column is sorted or filtered;
+       otherwise the totals are repainted in place so keyboard focus is not lost. */
+    commit(leaf, col, value, colIdx) {
+      this.version++;
+      this.dirty = true;
+      if (this.sort.col === colIdx || this.filters[colIdx]) this.render();
+      else this.totalRefs.forEach(r => this.paintTotals(r));
+
+      if (typeof this.opts.onChange === "function") {
+        this.opts.onChange({ row: leaf, field: col.field, value, data: this.data });
+      }
+    }
+
+    totalRow(cls, label, labelIdx, leaves) {
+      const L = this.levels.length;
+      const cells = this.blankCells();
+      const targets = [];
+
+      this.columns.forEach((c, j) => {
+        if (c.aggregate) targets.push({ col: c, el: cells[L + j] });
+      });
+      if (labelIdx >= 0) cells[labelIdx].textContent = label;
+
+      const ref = { leaves, targets };
+      this.paintTotals(ref);
+      this.totalRefs.push(ref);
+      return this.row(cells, cls);
+    }
+
+    paintTotals({ leaves, targets }) {
+      targets.forEach(({ col, el }) => {
+        const values = leaves.map(l => num(l[col.field]));
+        el.textContent = String(round(AGG[col.aggregate](values)));
+      });
+    }
+  }
+
+  global.TreeGrid = TreeGrid;
+
+})(window);
+
+
+/* =============================================================================
+   Page setup
+   ============================================================================ */
+
+/* Static data for now. Replace the body of getHours() with the real API call, e.g.
+
+     async function getHours() {
+       const res = await fetch("/api/hours", { headers: { Authorization: "Bearer <token>" } });
+       if (!res.ok) throw new Error("HTTP " + res.status);
+       return res.json();
+     }
+
+   The JSON carries the rows and, next to them, the master lists that feed the dropdowns:
+
+     {
+       lookups: {
+         hourTypes: [ "Office", "Remote", "Hybrid" ],                       // plain list
+         statuses:  [ { id: 1, name: "Draft" }, { id: 2, name: "Submitted" }, ... ]  // id + name
+       },
+       data: [ ...nested rows... ]
+     }
+
+   Nothing else on the page needs to change. */
+async function getHours() {
+  return {
+    lookups: {
+      hourTypes: ["Office", "Remote", "Hybrid"],
+      statuses: [
+        { id: 1, name: "Draft" },
+        { id: 2, name: "Submitted" },
+        { id: 3, name: "Approved" },
+        { id: 4, name: "Rejected" }
+      ]
+    },
+    data: [
+      {
+        name: "Canada",
+        state: [
+          { name: "Ontario", hours: [
+            { value: 8, type: "Office", statusId: 3, date: "2026-01-10" },
+            { value: 6, type: "Remote", statusId: 2, date: "2026-02-15" }
+          ]},
+          { name: "Nova Scotia", hours: [
+            { value: 7, type: "Hybrid", statusId: 1, date: "2026-03-01" }
+          ]}
+        ]
+      },
+      {
+        name: "United States",
+        state: [
+          { name: "California", hours: [
+            { value: 9, type: "Office", statusId: 3, date: "2026-04-10" },
+            { value: 5, type: "Remote", statusId: 2, date: "2026-05-10" }
+          ]},
+          { name: "Florida", hours: [
+            { value: 8, type: "Office", statusId: 3, date: "2026-01-10" },
+            { value: 4, type: "Remote", statusId: 1, date: "2026-02-15" }
+          ]}
+        ]
+      }
+    ]
+  };
+}
+
+/* Static stub for now: logs what would be sent. Replace the body with the real POST, e.g.
+
+     async function saveHours(data) {
+       const res = await fetch("/api/hours", {
+         method: "POST",
+         headers: { "Content-Type": "application/json", Authorization: "Bearer <token>" },
+         body: JSON.stringify(data)
+       });
+       if (!res.ok) throw new Error("HTTP " + res.status);
+       return res.json();          // optional: whatever the API answers
+     }
+
+   Call grid.save() from your own Save button or handler. */
+async function saveHours(data) {
+  console.log("Data that would be POSTed:", data);
+  return { ok: true };
+}
+
+const grid = new TreeGrid("#grid", {
+  fetcher: getHours,
+  saver: saveHours,
+
+  // Checkbox column in front of every row. Its group header reads "Action".
+  // Use { group: "Pick", label: "", width: 70 } to change the text or size, or leave it out to hide the column.
+  actionColumn: true,
+
+  // The rows are in the "data" field of the response. Leave dataPath out if the API returns a plain array.
+  dataPath: "data",
+
+  // Optional: delete "levels" and "columns" to have them inferred from the response.
+  levels: [
+    { label: "Country", field: "name", children: "state", group: "Location" },
+    { label: "State",   field: "name", children: "hours", group: "Location", subtotal: true }
+  ],
+  columns: [
+    { label: "Hours", field: "value", group: "Work details", type: "number", min: 0, step: 0.5, aggregate: "sum" },
+    // Dropdown choices come from the lookup lists in the JSON returned by getHours(). Each select
+    // column names its own list, so any number of lookup columns works.
+    { label: "Type",   field: "type",     group: "Work details", type: "select", optionsPath: "lookups.hourTypes" },
+    // A list of { id, name } objects: the row stores the id, the dropdown shows the name.
+    { label: "Status", field: "statusId", group: "Work details", type: "select", optionsPath: "lookups.statuses",
+      optionValue: "id", optionLabel: "name" },
+    { label: "Date",  field: "date",  group: "Work details", type: "date" }
+  ],
+  subtotalLabel: "Total for {name}",
+  grandTotalLabel: "Grand Total"
+
+  // onSelectionChange: ({ selected, count }) => console.log(count + " row(s) ticked", selected),
+  // onSave: result => alert("Saved"),
+  // onSaveError: err => alert("Could not save: " + err.message),
+  // onChange: ({ row, field, value }) => { /* e.g. enable your Save button via grid.isDirty() */ },
+});</script>
+
+</body>
+</html>
