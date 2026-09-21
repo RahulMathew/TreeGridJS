@@ -70,6 +70,8 @@
                              subtotal   true = show a subtotal row under each group at this level
                              id         property that uniquely identifies a group (default: field)
                              width      column width in px
+                             hidden     true = column starts hidden (default false). Shown/hidden again
+                                        from the column-settings menu (see below).
              columns[]       field      property on each leaf row (required)
                              label      header text
                              group      column group header shown above this column (see below)
@@ -93,21 +95,42 @@
                              aggregate  "sum" | "avg" | "min" | "max" | "count" -> totals for the column
                              min, max, step   passed to number inputs
                              width      column width in px
+                             hidden     true = column starts hidden (default false). Shown/hidden again
+                                        from the column-settings menu (see below).
              columnWidth     default column width in px (220)
 
            Action column (row selection)
            -----------------------------
-             actionColumn    true, or { group, label, width }: adds a checkbox column as the first column.
+             actionColumn    true, or { group, label, width, field }: adds a checkbox column as the
+                             first column.
                                group  text of its column group header (default "Action", "" = none)
                                label  header text (default "": the header holds a select-all checkbox)
                                width  column width in px (default 90)
+                               field  property on each leaf row that mirrors its ticked state
+                                      (default "checked"). If a row already has this property set to
+                                      true when the data loads, its checkbox starts ticked. Ticking or
+                                      unticking a row writes true/false back to that property, so the
+                                      selection survives sorting, filtering, refresh() and round-trips
+                                      through save() along with the rest of the row.
              onSelectionChange  ({ selected, count }) => {}   called whenever the ticked rows change
 
              The header checkbox ticks every row that is currently shown (after filtering). A group
              checkbox ticks every row inside that group, even when the group is collapsed. Both show a
              partial state when only some rows are ticked. Ticked rows are the same objects as in your
              data, so include an id field in your rows if you need to identify them.
-             Ticks are kept while sorting, filtering and editing, and cleared when new data is loaded.
+             Ticks are kept while sorting, filtering and editing, and cleared when new data is loaded
+             unless the loaded rows already carry the "field" above.
+
+           Column settings (show/hide columns)
+           ------------------------------------
+             A gear icon is shown as the last column of the grid. Right-clicking it (or clicking /
+             pressing Enter on it) opens a menu listing every level and column with a checkmark next to
+             the ones currently visible; unticked entries are the hidden ones. Selecting any entry
+             toggles it - picking an unticked (hidden) column makes it visible again, picking a ticked
+             one hides it. A column can also start hidden by giving it { hidden: true } in "levels" or
+             "columns" above.
+             columnSettings   false = remove the gear icon/menu entirely.
+                               { width } = width in px of the gear column (default 44).
 
            Column group headers
            --------------------
@@ -140,6 +163,8 @@
              grid.getSelected(options)  the ticked rows (array of row objects, in data order)
              grid.selectAll()           tick every row, ignoring filters
              grid.clearSelection()      untick everything
+                                        (selectAll/clearSelection also write actionColumn.field on every row,
+                                         same as ticking a checkbox by hand)
              grid.setData(array)        replace the data with rows you already have
              grid.setOptions(options)   replace data source and configuration
              grid.getData()             the data array itself (live, not a copy)
@@ -216,6 +241,19 @@
 .tg input[type=checkbox]:disabled{cursor:default;}
 .tg-row.tg-selected{background:#e8f2fb;}
 
+/* column settings: gear icon + its popup menu */
+.tg-header.tg-settings{cursor:pointer;justify-content:center;flex:0 0 auto;}
+.tg-header.tg-settings:hover{background:rgba(0,120,212,0.08);}
+.tg-settings-icon{font-size:16px;line-height:1;user-select:none;border-radius:3px;padding:2px 4px;}
+.tg-settings-icon:focus-visible{outline:2px solid #0078d4;outline-offset:2px;}
+.tg-settings-cell,.tg-settings-filler{flex:0 0 auto;}
+.tg-colmenu{position:fixed;z-index:1000;background:#fff;border:1px solid #cfd6dc;border-radius:4px;
+      box-shadow:0 4px 16px rgba(0,0,0,0.18);padding:4px 0;min-width:180px;max-height:70vh;overflow-y:auto;font-size:13px;}
+.tg-colmenu-item{display:flex;align-items:center;gap:8px;padding:6px 14px;cursor:pointer;white-space:nowrap;}
+.tg-colmenu-item:hover,.tg-colmenu-item:focus-visible{background:#eef4fb;outline:none;}
+.tg-colmenu-tick{width:14px;flex:0 0 auto;color:#0078d4;font-weight:700;}
+.tg-colmenu-label{overflow:hidden;text-overflow:ellipsis;}
+
 .tg-header,.tg-filter-cell{flex:0 0 auto;padding:10px;}
 .tg-header{cursor:pointer;user-select:none;display:flex;align-items:center;justify-content:space-between;}
 .tg-header:hover{background:rgba(0,120,212,0.08);}
@@ -223,6 +261,10 @@
 
 .tg-row{display:flex;border-bottom:1px solid #e5e9ef;}
 .tg-cell{flex:0 0 auto;padding:8px 10px;display:flex;align-items:center;min-width:0;overflow:hidden;}
+
+/* the last visible data column grows to fill any extra width, so the settings column
+       (and the grid as a whole) stays flush with the right edge instead of leaving a gap */
+.tg-header.tg-stretch,.tg-filter-cell.tg-stretch,.tg-cell.tg-stretch,.tg-group.tg-stretch{flex:1 0 auto;}
 
 .tg-expand{cursor:pointer;font-weight:bold;color:#0078d4;margin-right:5px;user-select:none;}
 .tg-expand:focus-visible{outline:2px solid #0078d4;outline-offset:2px;}
@@ -366,7 +408,7 @@
                         if (!l || !l.field || !l.children) {
                             throw new Error(`TreeGrid: levels[${i}] needs both "field" and "children".`);
                         }
-                        return { subtotal: false, ...l };
+                        return { subtotal: false, hidden: false, ...l };
                     });
 
                     const columns = (opts.columns || inferred.columns).map((c, i) => {
@@ -374,7 +416,7 @@
                         if (c.aggregate && !AGG[c.aggregate]) {
                             throw new Error(`TreeGrid: columns[${i}] has unknown aggregate "${c.aggregate}".`);
                         }
-                        return { type: "text", editable: true, ...c, label: c.label || title(c.field) };
+                        return { type: "text", editable: true, hidden: false, ...c, label: c.label || title(c.field) };
                     });
 
                     const width = opts.columnWidth || 220;
@@ -385,8 +427,8 @@
                     this.levels = levels;
                     this.columns = columns;
                     this.cols = [
-                        ...levels.map(l => ({ label: l.label || title(l.field), width: l.width || width, group: text(l.group) })),
-                        ...columns.map(c => ({ label: c.label, width: c.width || width, group: text(c.group) }))
+                        ...levels.map(l => ({ label: l.label || title(l.field), width: l.width || width, group: text(l.group), hidden: !!l.hidden })),
+                        ...columns.map(c => ({ label: c.label, width: c.width || width, group: text(c.group), hidden: !!c.hidden }))
                     ];
 
                     /* optional checkbox column shown in front of every row */
@@ -394,19 +436,24 @@
                     this.action = a ? {
                         label: isObj(a) ? text(a.label) : "",
                         group: isObj(a) && a.group !== undefined ? text(a.group) : "Action",
-                        width: (isObj(a) && a.width) || 90
+                        width: (isObj(a) && a.width) || 90,
+                        field: (isObj(a) && a.field) || "checked"   // leaf property that mirrors the ticked state
                     } : null;
 
-                    /* indexes of the data columns where a new group starts (drawn as a divider in the header and filter rows) */
-                    const all = this.action ? [{ group: this.action.group }, ...this.cols] : this.cols;
-                    const shift = this.action ? 1 : 0;
-                    this.groupStarts = new Set();
-                    all.forEach((c, k) => { if (k > 0 && c.group !== all[k - 1].group) this.groupStarts.add(k - shift); });
+                    /* trailing "settings" column: a gear icon that opens the column show/hide menu */
+                    const s = opts.columnSettings;
+                    this.settings = s !== false;
+                    this.settingsWidth = (isObj(s) && s.width) || 44;
 
                     const hadSelection = this.selected ? this.selected.size : 0;
                     this.selected = new Set();   // ticked leaf rows (kept outside the data, so they never end up in save())
                     this.selRefs = [];
                     this.hasAgg = columns.some(c => c.aggregate);
+
+                    /* pick up rows that already come in ticked (row[action.field] === true) */
+                    if (this.action) {
+                        this.collect(data, 0, []).forEach(l => { if (l && l[this.action.field]) this.selected.add(l); });
+                    }
 
                     this.resolveSelectOptions();
 
@@ -711,10 +758,57 @@
 
                     const root = el("div", "tg");
                     const inner = el("div", "tg-inner");
-                    const head = el("div", "tg-head");
-                    const filterRow = el("div", "tg-filter-row");
+                    this.head = el("div", "tg-head");
                     this.headerRow = el("div", "tg-header-row");
                     this.body = el("div", "tg-body");
+
+                    this.filterRow = this.buildFilterRow();
+                    this.groupRowEl = this.buildGroupRowOrNull();
+
+                    if (this.groupRowEl) this.head.appendChild(this.groupRowEl);
+                    this.head.append(this.headerRow, this.filterRow);
+                    inner.append(this.head, this.body);
+                    root.appendChild(inner);
+                    this.host.appendChild(root);
+                }
+
+                /* Indexes into this.cols that are currently visible (not hidden via column settings). */
+                visibleIdx() {
+                    return this.cols.map((_, i) => i).filter(i => !this.cols[i].hidden);
+                }
+
+                /* Index of the right-most visible column, or -1 if none. That column stretches to
+                   fill any leftover width so the trailing settings column stays small and flush
+                   with the right edge instead of leaving a gap after it. */
+                lastVisibleIdx() {
+                    const idx = this.visibleIdx();
+                    return idx.length ? idx[idx.length - 1] : -1;
+                }
+
+                /* Indexes of the visible columns where a new group starts (drawn as a divider in the
+                   header and filter rows). Recomputed on demand since hidden columns can change at
+                   any time from the column-settings menu. */
+                computeGroupStarts() {
+                    const idx = this.visibleIdx();
+                    const visCols = idx.map(i => this.cols[i]);
+                    const all = this.action ? [{ group: this.action.group }, ...visCols] : visCols;
+                    const shift = this.action ? 1 : 0;
+                    const starts = new Set();
+                    all.forEach((c, k) => {
+                        if (k > 0 && c.group !== all[k - 1].group) {
+                            const pos = k - shift;
+                            if (pos >= 0 && pos < idx.length) starts.add(idx[pos]);
+                        }
+                    });
+                    return starts;
+                }
+
+                /* Builds the filter row from scratch, respecting the columns currently visible.
+                   Preserves any filter text already typed, so re-layouting (e.g. hiding a column)
+                   doesn't wipe what the user typed elsewhere. */
+                buildFilterRow() {
+                    this.groupStarts = this.computeGroupStarts();
+                    const filterRow = el("div", "tg-filter-row");
 
                     if (this.action) {
                         const blank = el("div", "tg-filter-cell");
@@ -722,34 +816,71 @@
                         filterRow.appendChild(blank);
                     }
 
-                    this.cols.forEach((col, i) => {
+                    this.visibleIdx().forEach(i => {
+                        const col = this.cols[i];
                         const cell = el("div", "tg-filter-cell");
                         cell.style.width = col.width + "px";
+                        if (i === this.lastVisibleIdx()) cell.classList.add("tg-stretch");
                         if (this.groupStarts.has(i)) cell.classList.add("tg-group-start");
                         const input = document.createElement("input");
                         input.placeholder = "Filter...";
                         input.setAttribute("aria-label", "Filter " + col.label);
+                        input.value = this.filters[i] || "";
                         input.oninput = () => { this.filters[i] = input.value.toLowerCase(); this.render(); };
                         cell.appendChild(input);
                         filterRow.appendChild(cell);
                     });
 
-                    if (this.groupSpans().some(s => s.label)) head.appendChild(this.buildGroupRow());
-                    head.append(this.headerRow, filterRow);
-                    inner.append(head, this.body);
-                    root.appendChild(inner);
-                    this.host.appendChild(root);
+                    if (this.settings) {
+                        const blank = el("div", "tg-filter-cell tg-settings-filler");
+                        blank.style.width = this.settingsWidth + "px";
+                        filterRow.appendChild(blank);
+                    }
+
+                    return filterRow;
                 }
 
-                /* Spans of neighbouring columns that share a group text, e.g. [{ label:"Location", span:2, width:440 }, ...]. */
+                buildGroupRowOrNull() {
+                    return this.groupSpans().some(s => s.label) ? this.buildGroupRow() : null;
+                }
+
+                /* Rebuilds the filter row and group-header row in place (columns visible/hidden may
+                   have changed). Called after toggling a column from the settings menu. */
+                relayoutHeaders() {
+                    const newFilterRow = this.buildFilterRow();
+                    this.filterRow.replaceWith(newFilterRow);
+                    this.filterRow = newFilterRow;
+
+                    const newGroupRow = this.buildGroupRowOrNull();
+                    if (this.groupRowEl) this.groupRowEl.remove();
+                    if (newGroupRow) this.head.insertBefore(newGroupRow, this.headerRow);
+                    this.groupRowEl = newGroupRow;
+                }
+
+                /* Spans of neighbouring, currently-visible columns that share a group text, e.g.
+                   [{ label:"Location", span:2, width:440 }, ...]. Includes a blank span for the
+                   trailing settings column so header widths stay aligned. The span that holds the
+                   right-most real column is flagged "stretch" so it grows to fill leftover width. */
                 groupSpans() {
                     const spans = [];
-                    const list = this.action ? [{ group: this.action.group, width: this.action.width }, ...this.cols] : this.cols;
+                    const visCols = this.visibleIdx().map(i => this.cols[i]);
+                    const list = this.action ? [{ group: this.action.group, width: this.action.width }, ...visCols] : visCols;
+                    /* group:null (not "") guarantees this never merges into the same span as a real
+                       column whose own group is blank ("") */
+                    if (this.settings) list.push({ group: null, width: this.settingsWidth, settings: true });
+
                     list.forEach(col => {
                         const last = spans[spans.length - 1];
-                        if (last && last.label === col.group) { last.span++; last.width += col.width; }
-                        else spans.push({ label: col.group, span: 1, width: col.width });
+                        if (last && !last.settings && !col.settings && last.label === col.group) {
+                            last.span++; last.width += col.width;
+                        } else {
+                            spans.push({ label: col.group, span: 1, width: col.width, settings: !!col.settings });
+                        }
                     });
+
+                    for (let k = spans.length - 1; k >= 0; k--) {
+                        if (!spans[k].settings) { spans[k].stretch = true; break; }
+                    }
                     return spans;
                 }
 
@@ -758,6 +889,7 @@
                     row.setAttribute("role", "row");
                     this.groupSpans().forEach(s => {
                         const cell = el("div", "tg-group");
+                        if (s.stretch) cell.classList.add("tg-stretch");
                         cell.style.width = s.width + "px";
                         cell.setAttribute("role", "columnheader");
                         cell.setAttribute("aria-colspan", String(s.span));
@@ -784,11 +916,14 @@
                 }
 
                 renderHeader() {
+                    this.groupStarts = this.computeGroupStarts();
                     this.headerRow.textContent = "";
                     if (this.action) this.headerRow.appendChild(this.actionHeader());
-                    this.cols.forEach((col, i) => {
+                    this.visibleIdx().forEach(i => {
+                        const col = this.cols[i];
                         const d = el("div", "tg-header");
                         d.style.width = col.width + "px";
+                        if (i === this.lastVisibleIdx()) d.classList.add("tg-stretch");
                         if (this.groupStarts.has(i)) d.classList.add("tg-group-start");
 
                         const label = document.createElement("span");
@@ -804,6 +939,97 @@
                         };
                         this.headerRow.appendChild(d);
                     });
+                    if (this.settings) this.headerRow.appendChild(this.settingsHeader());
+                }
+
+                /* Gear icon shown as the last column: right-click (or click / Enter) opens the
+                   column show/hide menu. */
+                settingsHeader() {
+                    const d = el("div", "tg-header tg-settings");
+                    d.style.width = this.settingsWidth + "px";
+                    d.title = "Column settings";
+
+                    const icon = el("span", "tg-settings-icon");
+                    icon.textContent = "\u2699";
+                    icon.setAttribute("role", "button");
+                    icon.setAttribute("aria-label", "Show or hide columns");
+                    icon.setAttribute("aria-haspopup", "true");
+                    icon.tabIndex = 0;
+
+                    const open = (x, y) => this.openColumnMenu(x, y);
+                    d.oncontextmenu = e => { e.preventDefault(); open(e.clientX, e.clientY); };
+                    d.onclick = e => { const r = icon.getBoundingClientRect(); open(r.left, r.bottom); };
+                    d.onkeydown = e => {
+                        if (e.key === "Enter" || e.key === " ") {
+                            e.preventDefault();
+                            const r = icon.getBoundingClientRect();
+                            open(r.left, r.bottom);
+                        }
+                    };
+
+                    d.appendChild(icon);
+                    return d;
+                }
+
+                /* Popup menu listing every level/column: ticked = visible, unticked = hidden.
+                   Selecting an entry flips its visibility (an unticked entry becomes visible, a
+                   ticked one is hidden). */
+                openColumnMenu(x, y) {
+                    this.closeColumnMenu();
+
+                    const menu = el("div", "tg-colmenu");
+                    menu.setAttribute("role", "menu");
+                    menu.style.left = x + "px";
+                    menu.style.top = y + "px";
+
+                    this.cols.forEach(col => {
+                        const item = el("div", "tg-colmenu-item");
+                        item.setAttribute("role", "menuitemcheckbox");
+                        item.setAttribute("aria-checked", String(!col.hidden));
+                        item.tabIndex = -1;
+
+                        const tick = el("span", "tg-colmenu-tick");
+                        tick.textContent = col.hidden ? "" : "\u2713";
+                        const label = el("span", "tg-colmenu-label");
+                        label.textContent = col.label;
+                        item.append(tick, label);
+
+                        item.onclick = () => {
+                            col.hidden = !col.hidden;
+                            this.closeColumnMenu();
+                            this.relayoutHeaders();
+                            this.render();
+                        };
+                        menu.appendChild(item);
+                    });
+
+                    document.body.appendChild(menu);
+                    this.colMenu = menu;
+
+                    /* keep the menu on-screen */
+                    const rect = menu.getBoundingClientRect();
+                    if (rect.right > window.innerWidth) menu.style.left = Math.max(0, window.innerWidth - rect.width - 4) + "px";
+                    if (rect.bottom > window.innerHeight) menu.style.top = Math.max(0, window.innerHeight - rect.height - 4) + "px";
+
+                    this._menuCloser = e => { if (!menu.contains(e.target)) this.closeColumnMenu(); };
+                    this._menuEsc = e => { if (e.key === "Escape") this.closeColumnMenu(); };
+                    /* deferred so the click/contextmenu that opened the menu doesn't immediately close it */
+                    setTimeout(() => {
+                        document.addEventListener("mousedown", this._menuCloser);
+                        document.addEventListener("contextmenu", this._menuCloser);
+                        document.addEventListener("keydown", this._menuEsc);
+                        window.addEventListener("scroll", this._menuCloser, true);
+                    }, 0);
+                }
+
+                closeColumnMenu() {
+                    if (!this.colMenu) return;
+                    this.colMenu.remove();
+                    this.colMenu = null;
+                    document.removeEventListener("mousedown", this._menuCloser);
+                    document.removeEventListener("contextmenu", this._menuCloser);
+                    document.removeEventListener("keydown", this._menuEsc);
+                    window.removeEventListener("scroll", this._menuCloser, true);
                 }
 
                 /* ----- DOM: body ----- */
@@ -878,15 +1104,24 @@
                 /* Column that carries the label of a total row: the last (subtotal) or first (grand) column without an aggregate. */
                 labelColumn(first) {
                     const L = this.levels.length;
-                    const free = this.cols.map((_, i) => i).filter(i => i < L || !this.columns[i - L].aggregate);
-                    if (!free.length) return -1;
-                    return first ? free[0] : free[free.length - 1];
+                    const visible = new Set(this.visibleIdx());
+                    const free = this.cols.map((_, i) => i).filter(i => (i < L || !this.columns[i - L].aggregate) && visible.has(i));
+                    if (free.length) return first ? free[0] : free[free.length - 1];
+                    /* nothing visible and free: fall back to any free column so the total row still has a label somewhere */
+                    const anyFree = this.cols.map((_, i) => i).filter(i => i < L || !this.columns[i - L].aggregate);
+                    if (!anyFree.length) return -1;
+                    return first ? anyFree[0] : anyFree[anyFree.length - 1];
                 }
 
                 row(cells, cls, actionCell) {
                     const r = el("div", cls || "tg-row");
                     if (this.action) r.appendChild(actionCell || this.actionCell(null));
-                    cells.forEach(c => r.appendChild(c));
+                    this.visibleIdx().forEach(i => r.appendChild(cells[i]));
+                    if (this.settings) {
+                        const spacer = el("div", "tg-cell tg-settings-cell");
+                        spacer.style.width = this.settingsWidth + "px";
+                        r.appendChild(spacer);
+                    }
                     return r;
                 }
 
@@ -914,7 +1149,11 @@
                 }
 
                 setLeavesSelected(leaves, on) {
-                    leaves.forEach(l => (on ? this.selected.add(l) : this.selected.delete(l)));
+                    const field = this.action && this.action.field;
+                    leaves.forEach(l => {
+                        if (on) this.selected.add(l); else this.selected.delete(l);
+                        if (field) l[field] = on;   // keep the row's own property in sync
+                    });
                     this.updateSelectionUI();
                     this.fireSelection();
                 }
@@ -943,12 +1182,18 @@
                 }
 
                 selectAll() {
-                    this.collect(this.data, 0, []).forEach(l => this.selected.add(l));
+                    const field = this.action && this.action.field;
+                    this.collect(this.data, 0, []).forEach(l => {
+                        this.selected.add(l);
+                        if (field) l[field] = true;
+                    });
                     this.updateSelectionUI();
                     this.fireSelection();
                 }
 
                 clearSelection() {
+                    const field = this.action && this.action.field;
+                    if (field) this.selected.forEach(l => { l[field] = false; });
                     this.selected.clear();
                     this.updateSelectionUI();
                     this.fireSelection();
@@ -961,6 +1206,7 @@
                 cell(i, t) {
                     const d = el("div", "tg-cell");
                     d.style.width = this.cols[i].width + "px";
+                    if (i === this.lastVisibleIdx()) d.classList.add("tg-stretch");
                     if (t) d.textContent = t;
                     return d;
                 }
@@ -1128,13 +1374,15 @@
                         state: [
                             {
                                 name: "Ontario", hours: [
-                                    { value: 8, type: "Office", statusId: 3, date: "2026-01-10" },
-                                    { value: 6, type: "Remote", statusId: 2, date: "2026-02-15" }
+                                    // "checked": true here means this row's action-column checkbox
+                                    // starts ticked, and stays in sync with it from then on.
+                                    { value: 8, hourType: "Office", statusId: 3, date: "2026-01-10", checked: true },
+                                    { value: 6, hourType: "Remote", statusId: 2, date: "2026-02-15" }
                                 ]
                             },
                             {
                                 name: "Nova Scotia", hours: [
-                                    { value: 7, type: "Hybrid", statusId: 1, date: "2026-03-01" }
+                                    { value: 7, hourType: "Hybrid", statusId: 1, date: "2026-03-01" }
                                 ]
                             }
                         ]
@@ -1144,14 +1392,14 @@
                         state: [
                             {
                                 name: "California", hours: [
-                                    { value: 9, type: "Office", statusId: 3, date: "2026-04-10" },
-                                    { value: 5, type: "Remote", statusId: 2, date: "2026-05-10" }
+                                    { value: 9, hourType: "Office", statusId: 3, date: "2026-04-10" },
+                                    { value: 5, hourType: "Remote", statusId: 2, date: "2026-05-10" }
                                 ]
                             },
                             {
                                 name: "Florida", hours: [
-                                    { value: 8, type: "Office", statusId: 3, date: "2026-01-10" },
-                                    { value: 4, type: "Remote", statusId: 1, date: "2026-02-15" }
+                                    { value: 8, hourType: "Office", statusId: 3, date: "2026-01-10" },
+                                    { value: 4, hourType: "Remote", statusId: 1, date: "2026-02-15" }
                                 ]
                             }
                         ]
@@ -1183,7 +1431,8 @@
             saver: saveHours,
 
             // Checkbox column in front of every row. Its group header reads "Action".
-            // Use { group: "Pick", label: "", width: 70 } to change the text or size, or leave it out to hide the column.
+            // Use { group: "Pick", label: "", width: 70, field: "checked" } to change the text, size,
+            // or which row property mirrors the ticked state, or leave it out to hide the column.
             actionColumn: true,
 
             // The rows are in the "data" field of the response. Leave dataPath out if the API returns a plain array.
@@ -1198,13 +1447,15 @@
                 { label: "Hours", field: "value", group: "Work details", type: "number", min: 0, step: 0.5, aggregate: "sum" },
                 // Dropdown choices come from the lookup lists in the JSON returned by getHours(). Each select
                 // column names its own list, so any number of lookup columns works.
-                { label: "Type", field: "type", group: "Work details", type: "select", optionsPath: "lookups.hourTypes" },
+                { label: "Type", field: "hourType", group: "Work details", type: "select", optionsPath: "lookups.hourTypes" },
                 // A list of { id, name } objects: the row stores the id, the dropdown shows the name.
                 {
                     label: "Status", field: "statusId", group: "Work details", type: "select", optionsPath: "lookups.statuses",
                     optionValue: "id", optionLabel: "name"
                 },
-                { label: "Date", field: "date", group: "Work details", type: "date" }
+                // "hidden: true" starts a column hidden; it can be brought back from the gear-icon
+                // menu in the last column of the grid (right-click it, or click/press Enter on it).
+                { label: "Date", field: "date", group: "Work details", type: "date", hidden: true }
             ],
             subtotalLabel: "Total for {name}",
             grandTotalLabel: "Grand Total",
