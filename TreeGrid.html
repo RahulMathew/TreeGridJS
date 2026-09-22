@@ -94,6 +94,16 @@
                              editable   false = read-only text (default true)
                              aggregate  "sum" | "avg" | "min" | "max" | "count" -> totals for the column
                              min, max, step   passed to number inputs
+                             decimals (or precision)   type:"number" only - how many decimal places the
+                                        control accepts, e.g. 2 or 4. Extra decimal digits are blocked
+                                        as the user types, pastes, or uses the spinner arrows (typing
+                                        more just has no further effect once the limit is reached); the
+                                        input's step defaults to match (2 -> 0.01, 4 -> 0.0001) when
+                                        "step" isn't set, and read-only cells are formatted the same way.
+                             maxLength  type:"text" only - maximum number of characters the control accepts
+                             onKeyDown, onKeyUp   (event, { row, col, value }) => {}   fired on every
+                                        keydown/keyup while editing this column's control (text, number,
+                                        date and select all support both)
                              width      column width in px
                              hidden     true = column starts hidden (default false). Shown/hidden again
                                         from the column-settings menu (see below).
@@ -301,6 +311,9 @@
             const match = (v, f) => !f || text(v).toLowerCase().includes(f);
             const num = v => { const n = Number(v); return Number.isFinite(n) ? n : 0; };
             const round = n => Math.round(n * 100) / 100;
+            /* Rounds n to d decimal places (d defaults to 2, same as round()). Used for type:"number"
+               columns that set "decimals"/"precision". */
+            const roundTo = (n, d) => { const f = Math.pow(10, d == null ? 2 : d); return Math.round(n * f) / f; };
             const getPath = (obj, path) => String(path).split(".").reduce((o, k) => (o == null ? undefined : o[k]), obj);
             const title = s => String(s)
                 .replace(/([a-z])([A-Z])/g, "$1 $2")
@@ -416,7 +429,12 @@
                         if (c.aggregate && !AGG[c.aggregate]) {
                             throw new Error(`TreeGrid: columns[${i}] has unknown aggregate "${c.aggregate}".`);
                         }
-                        return { type: "text", editable: true, hidden: false, ...c, label: c.label || title(c.field) };
+                        const decimals = c.decimals != null ? c.decimals : c.precision;
+                        return {
+                            type: "text", editable: true, hidden: false, ...c,
+                            label: c.label || title(c.field),
+                            decimals: decimals != null ? Number(decimals) : null
+                        };
                     });
 
                     const width = opts.columnWidth || 220;
@@ -523,11 +541,16 @@
                     });
                 }
 
-                /* Text shown for a stored value: the lookup label for select columns, the value itself otherwise. */
+                /* Text shown for a stored value: the lookup label for select columns, a fixed-decimal
+                   string for number columns that set "decimals"/"precision", the value itself otherwise. */
                 labelOf(col, v) {
                     if (col.type === "select" && col._byValue) {
                         const entry = col._byValue.get(text(v));
                         if (entry) return entry.label;
+                    }
+                    if (col.type === "number" && col.decimals != null && v !== "" && v != null) {
+                        const n = Number(v);
+                        if (Number.isFinite(n)) return n.toFixed(col.decimals);
                     }
                     return text(v);
                 }
@@ -1273,17 +1296,39 @@
                         if (col.type === "number") {
                             if (col.min != null) input.min = col.min;
                             if (col.max != null) input.max = col.max;
-                            if (col.step != null) input.step = col.step;
+                            input.step = col.step != null ? col.step : (col.decimals != null ? 1 / Math.pow(10, col.decimals) : "any");
                         }
-                        input.value = v == null ? "" : v;
+                        if (col.type === "text" && col.maxLength != null) input.maxLength = col.maxLength;
+                        input.value = v == null ? "" : (col.type === "number" && col.decimals != null && v !== "" ? Number(v).toFixed(col.decimals) : v);
+
+                        /* type="number" inputs don't support maxlength, so extra decimal digits are
+                           trimmed live as the user types (or pastes, or uses the spinner arrows),
+                           rather than only rounding once they leave the field. */
+                        if (col.type === "number" && col.decimals != null) {
+                            input.oninput = () => {
+                                const raw = input.value;
+                                const dot = raw.indexOf(".");
+                                if (dot === -1) return;
+                                const cut = col.decimals <= 0 ? dot : dot + 1 + col.decimals;
+                                if (raw.length - dot - 1 > Math.max(col.decimals, 0)) input.value = raw.slice(0, cut);
+                            };
+                        }
                     }
 
                     input.setAttribute("aria-label", col.label);
+                    if (typeof col.onKeyDown === "function") {
+                        input.onkeydown = e => col.onKeyDown(e, { row: leaf, col, value: input.value });
+                    }
+                    if (typeof col.onKeyUp === "function") {
+                        input.onkeyup = e => col.onKeyUp(e, { row: leaf, col, value: input.value });
+                    }
                     input.onchange = () => {
                         const raw = input.value;
                         let value;
                         if (col.type === "select") value = byValue.has(raw) ? byValue.get(raw).raw : raw;   // keeps numbers as numbers
-                        else value = col.type === "number" ? (raw === "" ? 0 : Number(raw)) : raw;
+                        else if (col.type === "number") value = raw === "" ? 0 : (col.decimals != null ? roundTo(Number(raw), col.decimals) : Number(raw));
+                        else value = raw;
+                        if (col.type === "number" && col.decimals != null) input.value = value.toFixed(col.decimals);
                         leaf[col.field] = value;
                         this.commit(leaf, col, value, i);
                     };
@@ -1376,13 +1421,13 @@
                                 name: "Ontario", hours: [
                                     // "checked": true here means this row's action-column checkbox
                                     // starts ticked, and stays in sync with it from then on.
-                                    { value: 8, hourType: "Office", statusId: 3, date: "2026-01-10", checked: true },
-                                    { value: 6, hourType: "Remote", statusId: 2, date: "2026-02-15" }
+                                    { value: 8, hourType: "Office", statusId: 3, date: "2026-01-10", checked: true, note: "On-site kickoff" },
+                                    { value: 6, hourType: "Remote", statusId: 2, date: "2026-02-15", note: "" }
                                 ]
                             },
                             {
                                 name: "Nova Scotia", hours: [
-                                    { value: 7, hourType: "Hybrid", statusId: 1, date: "2026-03-01" }
+                                    { value: 7, hourType: "Hybrid", statusId: 1, date: "2026-03-01", note: "" }
                                 ]
                             }
                         ]
@@ -1392,14 +1437,14 @@
                         state: [
                             {
                                 name: "California", hours: [
-                                    { value: 9, hourType: "Office", statusId: 3, date: "2026-04-10" },
-                                    { value: 5, hourType: "Remote", statusId: 2, date: "2026-05-10" }
+                                    { value: 9.25, hourType: "Office", statusId: 3, date: "2026-04-10", note: "" },
+                                    { value: 5, hourType: "Remote", statusId: 2, date: "2026-05-10", note: "" }
                                 ]
                             },
                             {
                                 name: "Florida", hours: [
-                                    { value: 8, hourType: "Office", statusId: 3, date: "2026-01-10" },
-                                    { value: 4, hourType: "Remote", statusId: 1, date: "2026-02-15" }
+                                    { value: 8, hourType: "Office", statusId: 3, date: "2026-01-10", note: "" },
+                                    { value: 4, hourType: "Remote", statusId: 1, date: "2026-02-15", note: "" }
                                 ]
                             }
                         ]
@@ -1426,6 +1471,22 @@
             return { ok: true };
         }
 
+        /* ---------------------------------------------------------------------
+           What's demoed below (all in getHours()'s data and the columns config
+           further down):
+             - The action checkbox writes back to each row's own "checked" property.
+               The very first row (Canada > Ontario > Office, value 8) starts
+               pre-ticked because its data already has checked:true.
+             - The "Date" column starts hidden ({ hidden:true }). Bring it back
+               from the gear icon in the grid's last column (right-click it, or
+               click / press Enter on it) - it opens a menu of every column.
+             - "Hours" is a number column with decimals:2. Try typing more than
+               2 decimal places into it: extra digits are blocked as you type,
+               paste, or use the spinner arrows, not just rounded afterwards.
+             - "Note" is a text column with maxLength:20 (typing stops at 20
+               characters) and onKeyDown/onKeyUp handlers that log to the
+               browser console - open devtools and type in it to see them fire.
+        --------------------------------------------------------------------- */
         const grid = new TreeGrid("#grid", {
             fetcher: getHours,
             saver: saveHours,
@@ -1444,7 +1505,13 @@
                 { label: "State", field: "name", children: "hours", group: "Location", subtotal: true }
             ],
             columns: [
-                { label: "Hours", field: "value", group: "Work details", type: "number", min: 0, step: 0.5, aggregate: "sum" },
+                {
+                    label: "Hours", field: "value", group: "Work details", type: "number", min: 0, step: 0.5,
+                    // "decimals" caps how many decimal places the control accepts - typing, pasting or
+                    // using the spinner arrows past 2 places is blocked live, not just rounded on commit.
+                    decimals: 2,
+                    aggregate: "sum"
+                },
                 // Dropdown choices come from the lookup lists in the JSON returned by getHours(). Each select
                 // column names its own list, so any number of lookup columns works.
                 { label: "Type", field: "hourType", group: "Work details", type: "select", optionsPath: "lookups.hourTypes" },
@@ -1455,7 +1522,16 @@
                 },
                 // "hidden: true" starts a column hidden; it can be brought back from the gear-icon
                 // menu in the last column of the grid (right-click it, or click/press Enter on it).
-                { label: "Date", field: "date", group: "Work details", type: "date", hidden: true }
+                { label: "Date", field: "date", group: "Work details", type: "date", hidden: true },
+                {
+                    label: "Note", field: "note", group: "Work details", type: "text",
+                    // "maxLength" caps how many characters a text control accepts (enforced natively as you type).
+                    maxLength: 20,
+                    // onKeyDown/onKeyUp fire on every keystroke in this column's control, for either type.
+                    // { row, col, value } gives the live text, so you can validate or react as the user types.
+                    onKeyDown: (e, { value }) => console.log("Note keydown:", e.key, "current value:", value),
+                    onKeyUp: (e, { value }) => console.log("Note keyup:", e.key, "current value:", value)
+                }
             ],
             subtotalLabel: "Total for {name}",
             grandTotalLabel: "Grand Total",
